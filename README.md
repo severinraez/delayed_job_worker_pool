@@ -44,6 +44,10 @@ The config file is a Ruby DSL inspired by the [Puma](https://github.com/puma/pum
 workers Integer(ENV['NUM_WORKERS'] || 1)
 queues (ENV['QUEUES'] || ENV['QUEUE'] || '').split(',')
 sleep_delay ENV['WORKER_SLEEP_DELAY']
+pooled_queues [
+  { workers: 1, dj_opts: { queues: ['default'] } },
+  { workers: 1, dj_opts: { queues: ['mailers'] } },
+]
 
 preload_app
 
@@ -81,6 +85,7 @@ Here's more information on each setting:
 
 * `workers` - The number of Delayed Job worker processes to fork. The master process will relaunch workers that fail.
 * Delayed Job worker settings (`queues`, `min_priority`, `max_priority`, `sleep_delay`, `read_ahead`) - These are passed through to the Delayed Job worker.
+* `pooled_queues` - Array of settings for each queue settings. The queue setting takes `workers`(number of workers) and `dj_opts`(delayed job options for that group of queues)
 * `preload_app` - This forces the master process to load Rails before forking worker processes causing the memory consumed by the code to be shared between workers. **If you use this setting make sure you re-establish any necessary connections in the on_worker_boot callback.**
 * `after_preload_app` - A callback that runs in the master process after preloading the app but before forking any workers.
 * `on_worker_boot` - A callback that runs in the worker process after it has been forked.

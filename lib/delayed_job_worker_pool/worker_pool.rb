@@ -7,6 +7,7 @@ module DelayedJobWorkerPool
     def initialize(options = {})
       @options = options
       @worker_pids = []
+      @worker_pid_opts = {}
       @pending_signals = []
       @pending_signal_read_pipe, @pending_signal_write_pipe = create_pipe(inheritable: false)
       @master_alive_read_pipe, @master_alive_write_pipe = create_pipe(inheritable: true)
@@ -27,6 +28,10 @@ module DelayedJobWorkerPool
 
       num_workers.times { fork_worker }
 
+      pooled_queues.each do |queue_pool|
+        queue_pool[:workers].times { fork_worker(queue_pool[:dj_opts]) }
+      end
+
       monitor_workers
 
       exit
@@ -37,7 +42,7 @@ module DelayedJobWorkerPool
 
     private
 
-    attr_reader :options, :worker_pids, :master_alive_read_pipe, :master_alive_write_pipe,
+    attr_reader :options, :worker_pids, :worker_pid_opts, :master_alive_read_pipe, :master_alive_write_pipe,
                 :pending_signals, :pending_signal_read_pipe, :pending_signal_write_pipe
     attr_accessor :shutting_down
 
@@ -98,7 +103,7 @@ module DelayedJobWorkerPool
       log("Worker #{worker_pid} exited with status #{status.to_i}")
       worker_pids.delete(worker_pid)
       invoke_callback(:after_worker_shutdown, worker_info(worker_pid))
-      fork_worker unless shutting_down
+      fork_worker(worker_pid_opts[worker_pid]) unless shutting_down
     end
 
     def has_workers?
@@ -113,14 +118,15 @@ module DelayedJobWorkerPool
       options[callback_name].call(*args) if options[callback_name]
     end
 
-    def fork_worker
-      worker_pid = Kernel.fork { run_worker }
+    def fork_worker(opts = nil)
+      worker_pid = Kernel.fork { run_worker(opts) }
       worker_pids << worker_pid
+      worker_pid_opts[worker_pid] = opts
       log("Started worker #{worker_pid}")
       invoke_callback(:after_worker_boot, worker_info(worker_pid))
     end
 
-    def run_worker
+    def run_worker(opts = nil)
       master_alive_write_pipe.close
 
       uninstall_signal_handlers
@@ -135,7 +141,7 @@ module DelayedJobWorkerPool
 
       invoke_callback(:on_worker_boot, worker_info(Process.pid))
 
-      DelayedJobWorkerPool::Worker.run(worker_options(Process.pid))
+      DelayedJobWorkerPool::Worker.run(worker_options(Process.pid, opts))
     rescue => e
       log("Worker failed with error: #{e.message}\n#{e.backtrace.join("\n")}")
       exit(1)
@@ -157,8 +163,13 @@ module DelayedJobWorkerPool
       options.fetch(:preload_app, false)
     end
 
-    def worker_options(worker_pid)
-      options.except(:workers, :preload_app, *DelayedJobWorkerPool::DSL::CALLBACK_SETTINGS).merge(name: worker_name(worker_pid))
+    def pooled_queues
+      options.fetch(:pooled_queues, [])
+    end
+
+    def worker_options(worker_pid, opts_override = nil)
+      opts = opts_override || options
+      opts.except(:workers, :preload_app, :pooled_queues, *DelayedJobWorkerPool::DSL::CALLBACK_SETTINGS).merge(name: worker_name(worker_pid))
     end
 
     def create_pipe(inheritable: true)
